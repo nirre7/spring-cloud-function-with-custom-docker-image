@@ -1,0 +1,90 @@
+# AWS CloudFormation template reference: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-reference.html
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Spring cloud demo with custom docker image
+
+Resources:
+  DemoRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: demo-repository
+      EmptyOnDelete: true
+      ImageTagMutability: MUTABLE
+      RepositoryPolicyText:
+        Statement:
+          - Sid: LambdaECRImageRetrievalPolicy
+            Effect: Allow
+            Principal:
+              Service:
+                - 'lambda.amazonaws.com'
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+  DemoLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: demo-lambda-execution-role
+      Description: Demo Role for Lambda execution
+      Policies:
+        - PolicyName: demo-lambda-execution-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - lambda:InvokeFunction
+                  - ecr:SetRepositoryPolicy
+                  - ecr:GetRepositoryPolicy
+                Resource: '*'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - 'lambda.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+  DemoLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Demo lambda
+      FunctionName: demo-lambda
+      Role: !GetAtt DemoLambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          DEFAULT_HANDLER: 'ping'
+          SPRING_CLOUD_FUNCTION_WEB_EXPORT_ENABLED: 'false'
+          LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD: 'DEBUG'
+      MemorySize: 2024
+      Timeout: 300
+      PackageType: Image
+      Code:
+        ImageUri:
+          !Join
+          - ''
+          - - !GetAtt DemoRepo.RepositoryUri
+            - ':latest'
+      LoggingConfig:
+        LogGroup: !Sub '/aws/demo-lambda'
+  DemoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: DemoQueue
+      VisibilityTimeout: 300
+  DemoLambdaSqsTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt DemoQueue.Arn
+      FunctionName: !Ref DemoLambda
+      Enabled: true
